@@ -1,6 +1,0 @@
-@prefix eg: <xri://e.g/> .
-
-eg:I:Org:Amoco a eg:T:Company ;
-    eg:P:name "Amoco" ;
-    eg:P:ownedBy eg:I:Org:BP .
-

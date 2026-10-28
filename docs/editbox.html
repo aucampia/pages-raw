@@ -4,28 +4,77 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Editbox</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <style>
-  :root { color-scheme: light dark; --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --fg: #f2f2f7; --muted: #98989d; --border: #3a3a3c; } }
+  :root {
+    color-scheme: light dark;
+    --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7; --code-bg: #f2f2f5;
+    --md-head: #0b5cad; --md-mark: #a0a0a8; --md-code: #b3261e; --md-link: #1a7f37; --md-em: #8250df; --md-quote: #6e6e73;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e; --fg: #f2f2f7; --muted: #98989d; --border: #3a3a3c; --code-bg: #2c2c2e;
+      --md-head: #6cb6ff; --md-mark: #6e6e73; --md-code: #ff938a; --md-link: #57d364; --md-em: #c297ff; --md-quote: #98989d;
+    }
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 15px system-ui, sans-serif; }
   body { display: flex; flex-direction: column; }
   header { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }
   header .status { margin-left: auto; color: var(--muted); font-size: 13px; }
   button { font: inherit; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
-  textarea { flex: 1; width: 100%; max-width: 60em; margin: 0 auto; padding: 16px; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: 16px/1.5 system-ui, sans-serif; }
+  main { flex: 1; min-height: 0; width: 100%; max-width: 60em; margin: 0 auto; position: relative; }
+
+  /* The highlighted <pre> sits under a transparent <textarea>, so the native
+     textarea keeps spell checking and grammar extensions working. Both must
+     share exactly the same font, padding and wrapping to stay aligned. */
+  #highlight, #text {
+    position: absolute; inset: 0; margin: 0; padding: 16px; border: 0;
+    font: 16px/1.5 system-ui, sans-serif; letter-spacing: normal;
+    white-space: pre-wrap; overflow-wrap: break-word; tab-size: 4;
+    overflow-y: auto; scrollbar-gutter: stable;
+  }
+  #highlight { overflow-y: hidden; pointer-events: none; color: var(--fg); }
+  #text { background: transparent; color: transparent; caret-color: var(--fg); outline: none; resize: none; }
+  #text::selection { background: rgba(100, 150, 255, 0.35); color: transparent; }
+
+  /* Colours only: changing weight or style would shift glyph widths and break alignment. */
+  .md-head { color: var(--md-head); }
+  .md-mark { color: var(--md-mark); }
+  .md-code { color: var(--md-code); }
+  .md-link { color: var(--md-link); }
+  .md-em { color: var(--md-em); }
+  .md-quote { color: var(--md-quote); }
+
+  #preview { position: absolute; inset: 0; padding: 16px; overflow-y: auto; line-height: 1.5; font-size: 16px; }
+  #preview code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; font-size: 0.9em; }
+  #preview pre { background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  #preview pre code { padding: 0; background: none; }
+  #preview blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+  #preview a { color: var(--md-head); }
+  #preview :first-child { margin-top: 0; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
+  <button id="toggle">Preview</button>
   <button id="copy">Copy</button>
   <button id="clear">Clear</button>
   <span class="status" id="status"></span>
 </header>
-<textarea id="text" spellcheck="true" autofocus placeholder="Draft here…"></textarea>
+<main>
+  <pre id="highlight" aria-hidden="true"></pre>
+  <textarea id="text" spellcheck="true" autofocus placeholder="Draft here…"></textarea>
+  <div id="preview" hidden></div>
+</main>
 <script>
   const KEY = "editbox.draft";
   const text = document.getElementById("text");
+  const highlight = document.getElementById("highlight");
+  const preview = document.getElementById("preview");
+  const toggle = document.getElementById("toggle");
   const status = document.getElementById("status");
 
   function load() { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } }
@@ -35,16 +84,66 @@
     status.textContent = (msg ? msg + " · " : "") + words + " words · " + text.value.length + " chars";
   }
 
+  const escape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const span = (cls, s) => `<span class="${cls}">${s}</span>`;
+  const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(~~[^~\n]+~~)|(\[[^\]\n]+\]\([^)\n]+\))|(&lt;https?:\/\/[^\s&]+&gt;)/g;
+
+  function inline(s) {
+    return s.replace(INLINE, (m, code, strong, em, strike, link, autolink) => {
+      if (code) return span("md-code", m);
+      if (strong || em || strike) return span("md-em", m);
+      return span("md-link", m);
+    });
+  }
+
+  function highlightMarkdown(src) {
+    let inFence = false;
+    return src.split("\n").map((raw) => {
+      const line = escape(raw);
+      if (/^\s*(```|~~~)/.test(raw)) { inFence = !inFence; return span("md-mark", line); }
+      if (inFence) return span("md-code", line);
+      let m;
+      if ((m = line.match(/^(#{1,6}\s)(.*)$/))) return span("md-mark", m[1]) + span("md-head", m[2]);
+      if (/^(\s*[-*_]){3,}\s*$/.test(raw)) return span("md-mark", line);
+      if ((m = line.match(/^((?:&gt;\s?)+)(.*)$/))) return span("md-mark", m[1]) + span("md-quote", inline(m[2]));
+      if ((m = line.match(/^(\s*(?:[-*+]|\d+[.)])\s(?:\[[ xX]\]\s)?)(.*)$/))) return span("md-mark", m[1]) + inline(m[2]);
+      return inline(line);
+    }).join("\n") + "\n";
+  }
+
+  function render() { highlight.innerHTML = highlightMarkdown(text.value); }
+  function syncScroll() { highlight.scrollTop = text.scrollTop; }
+
+  function showPreview(on) {
+    if (on) {
+      preview.innerHTML = DOMPurify.sanitize(marked.parse(text.value, { gfm: true, breaks: true }));
+      preview.querySelectorAll("a").forEach((a) => { a.target = "_blank"; a.rel = "noopener"; });
+    }
+    preview.hidden = !on;
+    text.hidden = highlight.hidden = on;
+    toggle.textContent = on ? "Edit" : "Preview";
+    if (!on) { text.focus(); syncScroll(); }
+  }
+
   text.value = load();
+  render();
   update();
 
   let timer;
   text.addEventListener("input", () => {
+    render();
+    syncScroll();
     update();
     clearTimeout(timer);
     timer = setTimeout(save, 300);
   });
+  text.addEventListener("scroll", syncScroll);
   window.addEventListener("beforeunload", save);
+
+  toggle.addEventListener("click", () => showPreview(preview.hidden));
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "e") { e.preventDefault(); showPreview(preview.hidden); }
+  });
 
   document.getElementById("copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(text.value); update("Copied"); }
@@ -52,9 +151,10 @@
   });
   document.getElementById("clear").addEventListener("click", () => {
     text.value = "";
+    render();
     save();
     update("Cleared");
-    text.focus();
+    showPreview(false);
   });
 </script>
 </body>
