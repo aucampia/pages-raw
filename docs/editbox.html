@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editbox</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --fg: #f2f2f7; --muted: #98989d; --border: #3a3a3c; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 15px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  header .status { margin-left: auto; color: var(--muted); font-size: 13px; }
+  button { font: inherit; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+  textarea { flex: 1; width: 100%; max-width: 60em; margin: 0 auto; padding: 16px; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: 16px/1.5 system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<header>
+  <button id="copy">Copy</button>
+  <button id="clear">Clear</button>
+  <span class="status" id="status"></span>
+</header>
+<textarea id="text" spellcheck="true" autofocus placeholder="Draft here…"></textarea>
+<script>
+  const KEY = "editbox.draft";
+  const text = document.getElementById("text");
+  const status = document.getElementById("status");
+
+  function load() { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } }
+  function save() { try { localStorage.setItem(KEY, text.value); } catch {} }
+  function update(msg) {
+    const words = text.value.trim() ? text.value.trim().split(/\s+/).length : 0;
+    status.textContent = (msg ? msg + " · " : "") + words + " words · " + text.value.length + " chars";
+  }
+
+  text.value = load();
+  update();
+
+  let timer;
+  text.addEventListener("input", () => {
+    update();
+    clearTimeout(timer);
+    timer = setTimeout(save, 300);
+  });
+  window.addEventListener("beforeunload", save);
+
+  document.getElementById("copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text.value); update("Copied"); }
+    catch { text.select(); document.execCommand("copy"); update("Copied"); }
+  });
+  document.getElementById("clear").addEventListener("click", () => {
+    text.value = "";
+    save();
+    update("Cleared");
+    text.focus();
+  });
+</script>
+</body>
+</html>
